@@ -134,13 +134,9 @@
     </div>
 
     <div class="tab-panel active" id="tab-scan">
-      <label for="qr-photo-input" class="primary" style="display:block;text-align:center;cursor:pointer;">Open camera and scan</label>
-      <input type="file" accept="image/*" capture="environment" id="qr-photo-input" style="display:none;">
-      <div style="text-align:center;margin-top:8px;">
-        <label for="qr-gallery-input" style="font-size:13px;color:var(--muted);text-decoration:underline;cursor:pointer;">or choose an existing photo</label>
-        <input type="file" accept="image/*" id="qr-gallery-input" style="display:none;">
-      </div>
-      <div id="qr-decode-status" style="font-size:12px;color:var(--muted);margin-top:10px;text-align:center;">This opens your phone's own camera app - take a clear, close-up photo of the QR code.</div>
+      <label for="qr-photo-input" class="primary" style="display:block;text-align:center;cursor:pointer;">Take or choose a photo of the QR code</label>
+      <input type="file" accept="image/*" id="qr-photo-input" style="display:none;">
+      <div id="qr-decode-status" style="font-size:12px;color:var(--muted);margin-top:10px;text-align:center;">Tap this, then pick "Take Photo" - it opens your real camera app (not a stripped-down scan mode), so hold steady and get close.</div>
     </div>
 
     <div class="tab-panel" id="tab-paste">
@@ -368,7 +364,6 @@ function handleQrPhoto(e) {
   reader.readAsDataURL(file);
 }
 document.getElementById('qr-photo-input').addEventListener('change', handleQrPhoto);
-document.getElementById('qr-gallery-input').addEventListener('change', handleQrPhoto);
 
 document.getElementById('btn-paste-lookup').addEventListener('click', function() {
   const val = document.getElementById('paste-input').value.trim();
@@ -461,7 +456,6 @@ document.getElementById('btn-add').addEventListener('click', function() {
   document.getElementById('search-results').style.display = 'none';
   document.getElementById('qr-decode-status').textContent = '';
   document.getElementById('qr-photo-input').value = '';
-  document.getElementById('qr-gallery-input').value = '';
   document.getElementById('f-price').value = '';
   pendingPhoto = null;
   currentMatch = null;
