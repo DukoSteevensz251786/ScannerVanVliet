@@ -167,6 +167,7 @@
     </div>
 
     <div id="lookup-result"></div>
+    <button class="secondary" id="btn-manual-add" style="width:100%;margin-top:10px;">+ Add item manually (no label / not found)</button>
   </div>
 
   <div class="card" id="add-form-card" style="display:none;">
@@ -223,6 +224,15 @@ LOOKUP_RAW.forEach(function(r) {
 
 let entries = [];
 let storageOK = true;
+window.addEventListener('error', function(e) {
+  showToastSafe('Something went wrong with that last action - try again.');
+});
+window.addEventListener('unhandledrejection', function(e) {
+  showToastSafe('Something went wrong with that last action - try again.');
+});
+function showToastSafe(msg) {
+  try { showToast(msg); } catch (e) {}
+}
 try {
   const t = '__storage_test__';
   localStorage.setItem(t, '1');
@@ -334,30 +344,37 @@ function startCamera() {
       cropCanvas.height = DECODE_SIZE;
       function tick(ts) {
         if (!cameraStream) return;
-        if (video.readyState === video.HAVE_ENOUGH_DATA) {
-          if (!lastScanAt || ts - lastScanAt > 120) {
-            lastScanAt = ts;
-            const vw = video.videoWidth, vh = video.videoHeight;
-            const boxFrac = 0.6;
-            const cropSize = Math.round(Math.min(vw, vh) * boxFrac);
-            const sx = Math.round((vw - cropSize) / 2);
-            const sy = Math.round((vh - cropSize) / 2);
-            cropCtx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, DECODE_SIZE, DECODE_SIZE);
-            const imageData = cropCtx.getImageData(0, 0, DECODE_SIZE, DECODE_SIZE);
-            let code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-            if (!code) {
-              cropCtx.drawImage(video, 0, 0, vw, vh, 0, 0, DECODE_SIZE, Math.round(DECODE_SIZE * vh / vw));
-              const fullData = cropCtx.getImageData(0, 0, DECODE_SIZE, Math.round(DECODE_SIZE * vh / vw));
-              code = jsQR(fullData.data, fullData.width, fullData.height, { inversionAttempts: 'attemptBoth' });
-            }
-            if (code && code.data) {
-              status.textContent = 'Decoded: ' + code.data;
-              stopCamera();
-              const part = extractPartFromCode(code.data);
-              renderLookupResult(part);
-              return;
+        try {
+          if (video.readyState === video.HAVE_ENOUGH_DATA) {
+            if (!lastScanAt || ts - lastScanAt > 120) {
+              lastScanAt = ts;
+              const vw = video.videoWidth, vh = video.videoHeight;
+              if (vw > 0 && vh > 0) {
+                const boxFrac = 0.6;
+                const cropSize = Math.round(Math.min(vw, vh) * boxFrac);
+                const sx = Math.round((vw - cropSize) / 2);
+                const sy = Math.round((vh - cropSize) / 2);
+                cropCtx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, DECODE_SIZE, DECODE_SIZE);
+                const imageData = cropCtx.getImageData(0, 0, DECODE_SIZE, DECODE_SIZE);
+                let code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+                if (!code) {
+                  const fh = Math.max(1, Math.round(DECODE_SIZE * vh / vw));
+                  cropCtx.drawImage(video, 0, 0, vw, vh, 0, 0, DECODE_SIZE, fh);
+                  const fullData = cropCtx.getImageData(0, 0, DECODE_SIZE, fh);
+                  code = jsQR(fullData.data, fullData.width, fullData.height, { inversionAttempts: 'attemptBoth' });
+                }
+                if (code && code.data) {
+                  status.textContent = 'Decoded: ' + code.data;
+                  stopCamera();
+                  const part = extractPartFromCode(code.data);
+                  renderLookupResult(part);
+                  return;
+                }
+              }
             }
           }
+        } catch (err) {
+          status.textContent = 'Scanner hit a snag reading that frame - still trying...';
         }
         cameraScanHandle = requestAnimationFrame(tick);
       }
@@ -432,22 +449,28 @@ document.getElementById('qr-photo-input').addEventListener('change', function(e)
   if (!file) return;
   status.textContent = 'Reading photo...';
   const reader = new FileReader();
+  reader.onerror = function() { status.textContent = 'Could not read that photo. Try again or use "Search" instead.'; };
   reader.onload = function(ev) {
     const img = new Image();
+    img.onerror = function() { status.textContent = 'That file did not look like a photo. Try again.'; };
     img.onload = function() {
-      const canvas = document.createElement('canvas');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      const ctx = canvas.getContext('2d');
-      ctx.drawImage(img, 0, 0);
-      const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-      const code = jsQR(imageData.data, imageData.width, imageData.height);
-      if (code && code.data) {
-        status.textContent = 'Decoded: ' + code.data;
-        const part = extractPartFromCode(code.data);
-        renderLookupResult(part);
-      } else {
-        status.textContent = 'Could not read a QR code in that photo. Try again with better lighting, or use "Paste code" / "Search" instead.';
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const code = jsQR(imageData.data, imageData.width, imageData.height);
+        if (code && code.data) {
+          status.textContent = 'Decoded: ' + code.data;
+          const part = extractPartFromCode(code.data);
+          renderLookupResult(part);
+        } else {
+          status.textContent = 'Could not read a QR code in that photo. Try again with better lighting, or use "Search" / "Add item manually" instead.';
+        }
+      } catch (err) {
+        status.textContent = 'Could not process that photo. Try again, or use "Search" / "Add item manually" instead.';
       }
     };
     img.src = ev.target.result;
@@ -460,6 +483,13 @@ document.getElementById('btn-paste-lookup').addEventListener('click', function()
   if (!val) return;
   const part = extractPartFromCode(val);
   renderLookupResult(part);
+});
+
+document.getElementById('btn-manual-add').addEventListener('click', function() {
+  currentMatch = null;
+  document.getElementById('lookup-result').innerHTML = '';
+  openAddForm('', '', null);
+  document.getElementById('f-stock').focus();
 });
 
 let searchTimer = null;
