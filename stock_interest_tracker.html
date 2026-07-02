@@ -348,21 +348,47 @@ function setupTapToFocus(track, video) {
   });
 }
 
-function decodeImageBitmapOrImg(source, sw, sh, statusEl) {
+function decodeMultiAttempt(source, sw, sh) {
+  if (!sw || !sh) return null;
   const canvas = document.createElement('canvas');
-  const MAXW = 1600;
-  let w = sw, h = sh;
-  if (w > MAXW) { h = Math.round(h * MAXW / w); w = MAXW; }
-  canvas.width = w;
-  canvas.height = h;
   const ctx = canvas.getContext('2d');
-  ctx.drawImage(source, 0, 0, w, h);
-  const imageData = ctx.getImageData(0, 0, w, h);
-  const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
-  if (code && code.data) {
-    statusEl.textContent = 'Decoded: ' + code.data;
+  const sizes = [1600, 1100, 800, 500];
+  for (let i = 0; i < sizes.length; i++) {
+    const maxDim = sizes[i];
+    let w = sw, h = sh;
+    const needsScale = Math.max(w, h) > maxDim;
+    if (needsScale) {
+      const scale = maxDim / Math.max(w, h);
+      w = Math.round(w * scale); h = Math.round(h * scale);
+    } else if (i > 0) {
+      break;
+    }
+    canvas.width = w; canvas.height = h;
+    ctx.clearRect(0, 0, w, h);
+    ctx.drawImage(source, 0, 0, w, h);
+    const imageData = ctx.getImageData(0, 0, w, h);
+    const code = jsQR(imageData.data, w, h, { inversionAttempts: 'attemptBoth' });
+    if (code && code.data) return code.data;
+  }
+  const cropSize = Math.round(Math.min(sw, sh) * 0.55);
+  if (cropSize > 60) {
+    const sx = Math.round((sw - cropSize) / 2), sy = Math.round((sh - cropSize) / 2), target = 700;
+    canvas.width = target; canvas.height = target;
+    ctx.clearRect(0, 0, target, target);
+    ctx.drawImage(source, sx, sy, cropSize, cropSize, 0, 0, target, target);
+    const imageData = ctx.getImageData(0, 0, target, target);
+    const code = jsQR(imageData.data, target, target, { inversionAttempts: 'attemptBoth' });
+    if (code && code.data) return code.data;
+  }
+  return null;
+}
+
+function decodeImageBitmapOrImg(source, sw, sh, statusEl) {
+  const data = decodeMultiAttempt(source, sw, sh);
+  if (data) {
+    statusEl.textContent = 'Decoded: ' + data;
     stopCamera();
-    const part = extractPartFromCode(code.data);
+    const part = extractPartFromCode(data);
     renderLookupResult(part);
     return true;
   }
@@ -545,19 +571,13 @@ document.getElementById('qr-photo-input').addEventListener('change', function(e)
     img.onerror = function() { status.textContent = 'That file did not look like a photo. Try again.'; };
     img.onload = function() {
       try {
-        const canvas = document.createElement('canvas');
-        canvas.width = img.width;
-        canvas.height = img.height;
-        const ctx = canvas.getContext('2d');
-        ctx.drawImage(img, 0, 0);
-        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-        const code = jsQR(imageData.data, imageData.width, imageData.height);
-        if (code && code.data) {
-          status.textContent = 'Decoded: ' + code.data;
-          const part = extractPartFromCode(code.data);
+        const data = decodeMultiAttempt(img, img.width, img.height);
+        if (data) {
+          status.textContent = 'Decoded: ' + data;
+          const part = extractPartFromCode(data);
           renderLookupResult(part);
         } else {
-          status.textContent = 'Could not read a QR code in that photo. Try again with better lighting, or use "Search" / "Add item manually" instead.';
+          status.textContent = 'Could not read a QR code in that photo. Try "Open camera" for a live view, get closer so the code fills the frame, or use "Search" / "Add item manually" instead.';
         }
       } catch (err) {
         status.textContent = 'Could not process that photo. Try again, or use "Search" / "Add item manually" instead.';
