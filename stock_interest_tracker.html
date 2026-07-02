@@ -139,8 +139,13 @@
         <video id="camera-video" playsinline autoplay muted style="width:100%;display:block;"></video>
         <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);width:60%;aspect-ratio:1;border:3px solid rgba(255,255,255,0.85);border-radius:12px;box-shadow:0 0 0 2000px rgba(0,0,0,0.25);pointer-events:none;"></div>
         <button class="secondary" id="btn-camera-stop" style="position:absolute;bottom:10px;left:50%;transform:translateX(-50%);background:#fff;">Stop camera</button>
+        <button class="secondary" id="btn-torch" style="position:absolute;top:10px;right:10px;background:#fff;display:none;">Torch</button>
       </div>
-      <div id="camera-status" style="font-size:12px;color:var(--muted);margin-top:6px;"></div>
+      <div id="zoom-wrap" style="display:none;margin-top:8px;align-items:center;gap:8px;">
+        <span style="font-size:12px;color:var(--muted);">Zoom</span>
+        <input type="range" id="zoom-slider" min="1" max="1" step="0.1" value="1" style="flex:1;">
+      </div>
+      <div id="camera-status" style="font-size:12px;color:var(--muted);margin-top:6px;">Tip: hold steady and fill the box with the QR code - don't rely on pinch-zoom, it doesn't sharpen the camera.</div>
     </div>
 
     <div class="tab-panel" id="tab-scan">
@@ -257,12 +262,45 @@ document.querySelectorAll('.tab-btn').forEach(function(btn) {
 let cameraStream = null;
 let cameraScanHandle = null;
 let lastScanAt = 0;
+let cameraTrack = null;
 
 function stopCamera() {
   if (cameraScanHandle) { cancelAnimationFrame(cameraScanHandle); cameraScanHandle = null; }
   if (cameraStream) { cameraStream.getTracks().forEach(function(t) { t.stop(); }); cameraStream = null; }
+  cameraTrack = null;
   document.getElementById('camera-wrap').style.display = 'none';
+  document.getElementById('zoom-wrap').style.display = 'none';
+  document.getElementById('btn-torch').style.display = 'none';
   document.getElementById('btn-camera-start').style.display = 'block';
+}
+
+function setupZoomAndTorch(track) {
+  const caps = (track.getCapabilities && track.getCapabilities()) || {};
+  const zoomWrap = document.getElementById('zoom-wrap');
+  const slider = document.getElementById('zoom-slider');
+  if (caps.zoom) {
+    zoomWrap.style.display = 'flex';
+    slider.min = caps.zoom.min;
+    slider.max = caps.zoom.max;
+    slider.step = caps.zoom.step || 0.1;
+    slider.value = caps.zoom.min;
+    slider.oninput = function() {
+      track.applyConstraints({ advanced: [{ zoom: parseFloat(slider.value) }] }).catch(function() {});
+    };
+  } else {
+    zoomWrap.style.display = 'none';
+  }
+  const torchBtn = document.getElementById('btn-torch');
+  if (caps.torch) {
+    torchBtn.style.display = 'block';
+    let torchOn = false;
+    torchBtn.onclick = function() {
+      torchOn = !torchOn;
+      track.applyConstraints({ advanced: [{ torch: torchOn }] }).catch(function() {});
+    };
+  } else {
+    torchBtn.style.display = 'none';
+  }
 }
 
 function startCamera() {
@@ -272,26 +310,46 @@ function startCamera() {
     status.textContent = 'This browser will not allow live camera access here (often the case when a file is opened directly rather than a website). Use "Upload photo" instead - it uses the same camera to take a picture, then reads the code from it.';
     return;
   }
-  navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } } })
+  navigator.mediaDevices.getUserMedia({
+    video: {
+      facingMode: { ideal: 'environment' },
+      width: { ideal: 1920 },
+      height: { ideal: 1080 },
+      advanced: [{ focusMode: 'continuous' }]
+    }
+  })
     .then(function(stream) {
       cameraStream = stream;
+      cameraTrack = stream.getVideoTracks()[0];
+      setupZoomAndTorch(cameraTrack);
       const video = document.getElementById('camera-video');
       video.srcObject = stream;
       document.getElementById('camera-wrap').style.display = 'block';
       document.getElementById('btn-camera-start').style.display = 'none';
-      status.textContent = 'Point the camera at the QR code.';
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
+      status.textContent = 'Fill the box with the QR code - move closer rather than pinch-zooming.';
+      const cropCanvas = document.createElement('canvas');
+      const cropCtx = cropCanvas.getContext('2d');
+      const DECODE_SIZE = 900;
+      cropCanvas.width = DECODE_SIZE;
+      cropCanvas.height = DECODE_SIZE;
       function tick(ts) {
         if (!cameraStream) return;
         if (video.readyState === video.HAVE_ENOUGH_DATA) {
-          if (!lastScanAt || ts - lastScanAt > 180) {
+          if (!lastScanAt || ts - lastScanAt > 120) {
             lastScanAt = ts;
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-            const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-            const code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'dontInvert' });
+            const vw = video.videoWidth, vh = video.videoHeight;
+            const boxFrac = 0.6;
+            const cropSize = Math.round(Math.min(vw, vh) * boxFrac);
+            const sx = Math.round((vw - cropSize) / 2);
+            const sy = Math.round((vh - cropSize) / 2);
+            cropCtx.drawImage(video, sx, sy, cropSize, cropSize, 0, 0, DECODE_SIZE, DECODE_SIZE);
+            const imageData = cropCtx.getImageData(0, 0, DECODE_SIZE, DECODE_SIZE);
+            let code = jsQR(imageData.data, imageData.width, imageData.height, { inversionAttempts: 'attemptBoth' });
+            if (!code) {
+              cropCtx.drawImage(video, 0, 0, vw, vh, 0, 0, DECODE_SIZE, Math.round(DECODE_SIZE * vh / vw));
+              const fullData = cropCtx.getImageData(0, 0, DECODE_SIZE, Math.round(DECODE_SIZE * vh / vw));
+              code = jsQR(fullData.data, fullData.width, fullData.height, { inversionAttempts: 'attemptBoth' });
+            }
             if (code && code.data) {
               status.textContent = 'Decoded: ' + code.data;
               stopCamera();
